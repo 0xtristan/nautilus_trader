@@ -55,12 +55,18 @@ impl BulletCredential {
     /// Returns an error if the hex string is not 32 bytes.
     pub fn from_hex(hex: &str) -> Result<Self, BulletError> {
         let hex = hex.strip_prefix("0x").unwrap_or(hex);
-        let bytes = ::hex::decode(hex).map_err(|e| {
+        let mut bytes = ::hex::decode(hex).map_err(|e| {
             BulletError::Credential(format!("invalid hex private key: {e}"))
         })?;
-        let secret: [u8; 32] = bytes.try_into().map_err(|_| {
-            BulletError::Credential("private key must be exactly 32 bytes".to_string())
-        })?;
+        if bytes.len() != 32 {
+            bytes.zeroize();
+            return Err(BulletError::Credential(
+                "private key must be exactly 32 bytes".to_string(),
+            ));
+        }
+        let mut secret = [0u8; 32];
+        secret.copy_from_slice(&bytes);
+        bytes.zeroize();
         Ok(Self {
             signing_key: SigningKey::from_bytes(&secret),
         })
@@ -77,18 +83,20 @@ impl BulletCredential {
     ///
     /// Returns an error if the string is not valid base58 or the decoded length is not 32 or 64.
     pub fn from_base58(s: &str) -> Result<Self, BulletError> {
-        let bytes = bs58::decode(s).into_vec().map_err(|e| {
+        let mut bytes = bs58::decode(s).into_vec().map_err(|e| {
             BulletError::Credential(format!("invalid base58 private key: {e}"))
         })?;
-        let secret: [u8; 32] = match bytes.len() {
-            64 => bytes[..32].try_into().expect("slice is 32 bytes"),
-            32 => bytes.try_into().expect("slice is 32 bytes"),
+        let mut secret = [0u8; 32];
+        match bytes.len() {
+            64 | 32 => secret.copy_from_slice(&bytes[..32]),
             n => {
+                bytes.zeroize();
                 return Err(BulletError::Credential(format!(
                     "base58 key must decode to 32 or 64 bytes, got {n}"
                 )));
             }
-        };
+        }
+        bytes.zeroize();
         Ok(Self {
             signing_key: SigningKey::from_bytes(&secret),
         })

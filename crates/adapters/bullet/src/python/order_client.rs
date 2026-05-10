@@ -305,6 +305,7 @@ impl BulletOrderClient {
         new_price: String,
         new_qty: String,
         new_client_order_id: Option<u64>,
+        reduce_only: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let (http, creds, chain, market_id, tick_size, step_size) =
             self.resolve_symbol(&symbol)?;
@@ -332,7 +333,7 @@ impl BulletOrderClient {
             size: size_pd,
             side,
             order_type: BulletOrderType::Limit,
-            reduce_only: false,
+            reduce_only,
             client_order_id: new_client_order_id.map(BulletClientOrderId),
             pending_tpsl_pair: None,
         };

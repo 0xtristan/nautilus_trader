@@ -197,6 +197,7 @@ impl OrderUpdate {
             "orderId": common.order_id,
             "clientOrderId": common.client_order_id,
             "status": common.status,
+            "executionType": common.execution_type,
             "side": side,
             "price": price,
             "origQty": qty,

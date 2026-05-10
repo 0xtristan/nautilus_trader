@@ -170,8 +170,9 @@ class BulletExecutionClient(LiveExecutionClient):
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
             self._reconnect_task = None
-        if self._ws_client.is_connected():
-            await self._ws_client.close()
+        # Always call close() — it sets stop_flag on the Rust reconnect loop unconditionally.
+        # Guarding on is_connected() would leak the loop when it's between reconnect attempts.
+        await self._ws_client.close()
         self._log.info("Bullet execution client disconnected")
 
     async def _reconnect_monitor(self, address: str) -> None:
@@ -354,7 +355,7 @@ class BulletExecutionClient(LiveExecutionClient):
                 strategy_id=order.strategy_id,
                 instrument_id=instrument_id,
                 client_order_id=client_order_id,
-                reason=data.get("cancelReason", "REJECTED"),
+                reason=data.get("cancelReason") or data.get("executionType", "REJECTED"),
                 ts_event=ts_event,
             )
 
@@ -496,6 +497,7 @@ class BulletExecutionClient(LiveExecutionClient):
                 new_price=new_price,
                 new_qty=new_qty,
                 new_client_order_id=client_order_id_int,
+                reduce_only=getattr(order, "is_reduce_only", False),
             )
             self._log.info(f"Amend submitted: tx_id={tx_id}")
         except Exception as e:
@@ -586,7 +588,7 @@ class BulletExecutionClient(LiveExecutionClient):
                 filled = Quantity(float(o.get("executedQty", 0)), instrument.size_precision)
                 price_val = float(o.get("price", 0))
                 price = Price(price_val, instrument.price_precision) if price_val else None
-                update_ns = int(o.get("updateTime", 0)) * 1_000
+                update_ns = int(o.get("updateTime", 0)) * 1_000_000
                 return OrderStatusReport(
                     account_id=self.account_id,
                     instrument_id=command.instrument_id,
@@ -642,7 +644,7 @@ class BulletExecutionClient(LiveExecutionClient):
                     filled = Quantity(float(o.get("executedQty", 0)), instrument.size_precision)
                     price_val = float(o.get("price", 0))
                     price = Price(price_val, instrument.price_precision) if price_val else None
-                    update_ns = int(o.get("updateTime", 0)) * 1_000
+                    update_ns = int(o.get("updateTime", 0)) * 1_000_000
 
                     reports.append(
                         OrderStatusReport(
@@ -707,7 +709,7 @@ class BulletExecutionClient(LiveExecutionClient):
                     continue
                 side = PositionSide.LONG if qty > 0 else PositionSide.SHORT
                 entry = Decimal(str(pos.get("entryPrice", "0")))
-                update_ns = int(pos.get("updateTime", 0)) * 1_000
+                update_ns = int(pos.get("updateTime", 0)) * 1_000_000
                 reports.append(
                     PositionStatusReport(
                         account_id=self.account_id,
