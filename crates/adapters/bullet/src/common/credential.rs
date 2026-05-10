@@ -197,13 +197,8 @@ impl BulletCredential {
     }
 }
 
-impl Drop for BulletCredential {
-    fn drop(&mut self) {
-        // Zeroize the signing key bytes on drop
-        let mut key_bytes = self.signing_key.to_bytes();
-        key_bytes.zeroize();
-    }
-}
+// ed25519_dalek::SigningKey derives ZeroizeOnDrop, so the secret key bytes are
+// automatically overwritten when BulletCredential is dropped — no manual Drop needed.
 
 #[cfg(test)]
 mod tests {

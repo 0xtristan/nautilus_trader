@@ -213,41 +213,57 @@ impl BulletWebSocketClient {
                         running.store(true, Ordering::Relaxed);
                         tracing::info!(url = %url, "Bullet WS connected");
 
+                        // Oneshot: write task signals the read loop when the sink fails.
+                        let (write_dead_tx, mut write_dead_rx) =
+                            tokio::sync::oneshot::channel::<()>();
+
                         // Write task: pump outbound messages to the WS sink.
                         tokio::spawn(async move {
                             while let Some(msg) = conn_rx.recv().await {
                                 if sink.send(msg).await.is_err() {
+                                    tracing::warn!("Bullet WS write half failed");
+                                    let _ = write_dead_tx.send(());
                                     break;
                                 }
                             }
                         });
 
-                        // Read loop.
-                        while let Some(frame) = stream.next().await {
-                            if stop_flag.load(Ordering::Relaxed) {
-                                break;
-                            }
-                            match frame {
-                                Ok(Message::Text(text)) => {
-                                    tracing::debug!(raw = %text, "WS frame");
-                                    match serde_json::from_str::<ServerMessage>(&text) {
-                                        Ok(msg) => {
-                                            if read_tx.send(msg).is_err() {
-                                                // Receiver dropped — stop everything.
-                                                break 'outer;
+                        // Read loop — also breaks when the write half dies.
+                        loop {
+                            tokio::select! {
+                                biased;
+                                _ = &mut write_dead_rx => {
+                                    tracing::warn!("Bullet WS write failure detected — reconnecting");
+                                    break;
+                                }
+                                frame = stream.next() => {
+                                    match frame {
+                                        None => break,
+                                        Some(Ok(Message::Text(text))) => {
+                                            tracing::debug!(raw = %text, "WS frame");
+                                            match serde_json::from_str::<ServerMessage>(&text) {
+                                                Ok(msg) => {
+                                                    if read_tx.send(msg).is_err() {
+                                                        // Receiver dropped — stop everything.
+                                                        break 'outer;
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    tracing::warn!(
+                                                        error = %e,
+                                                        raw = %text,
+                                                        "failed to parse WS message"
+                                                    );
+                                                }
                                             }
                                         }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                error = %e,
-                                                raw = %text,
-                                                "failed to parse WS message"
-                                            );
-                                        }
+                                        Some(Ok(Message::Close(_))) | Some(Err(_)) => break,
+                                        Some(Ok(_)) => {}
                                     }
                                 }
-                                Ok(Message::Close(_)) | Err(_) => break,
-                                _ => {}
+                            }
+                            if stop_flag.load(Ordering::Relaxed) {
+                                break;
                             }
                         }
 

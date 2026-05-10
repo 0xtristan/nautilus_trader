@@ -302,6 +302,8 @@ class BulletExecutionClient(LiveExecutionClient):
                 )
 
         elif status in ("PARTIALLY_FILLED", "FILLED"):
+            # A fill terminates any pending amend wait (order could fill before WS NEW arrives)
+            self._pending_amend_cloids.discard(client_order_id.value)
             if last_fill_qty > 0 and last_fill_price > 0:
                 order_side = OrderSide.BUY if side == "BUY" else OrderSide.SELL
                 self.generate_order_filled(
@@ -343,8 +345,11 @@ class BulletExecutionClient(LiveExecutionClient):
             )
 
         elif status == "REJECTED":
-            self._cloid_map.pop(order_id, None)
-            self._nt_to_cloid.pop(client_order_id.value, None)
+            # Reject also terminates any pending amend
+            self._pending_amend_cloids.discard(client_order_id.value)
+            cloid_int = self._nt_to_cloid.pop(client_order_id.value, None)
+            if cloid_int is not None:
+                self._cloid_map.pop(cloid_int, None)
             self.generate_order_rejected(
                 strategy_id=order.strategy_id,
                 instrument_id=instrument_id,
@@ -479,6 +484,9 @@ class BulletExecutionClient(LiveExecutionClient):
         new_price = str(command.price) if command.price else str(order.price)
         new_qty = str(command.quantity) if command.quantity else str(order.quantity)
 
+        # Register before the await — the CANCELED for the old order can arrive before
+        # amend_order returns if the exchange processes it synchronously.
+        self._pending_amend_cloids.add(command.client_order_id.value)
         try:
             tx_id = await self._order_client.amend_order(
                 symbol=bullet_symbol,
@@ -489,11 +497,9 @@ class BulletExecutionClient(LiveExecutionClient):
                 new_qty=new_qty,
                 new_client_order_id=client_order_id_int,
             )
-            # Track pending cancel-replace so the CANCELED for the old order is suppressed
-            # and the replacement's NEW is emitted as OrderUpdated.
-            self._pending_amend_cloids.add(command.client_order_id.value)
             self._log.info(f"Amend submitted: tx_id={tx_id}")
         except Exception as e:
+            self._pending_amend_cloids.discard(command.client_order_id.value)
             self._log.error(f"Failed to amend order {command.client_order_id}: {e}")
 
     async def _cancel_all_orders(self, command: CancelAllOrders) -> None:

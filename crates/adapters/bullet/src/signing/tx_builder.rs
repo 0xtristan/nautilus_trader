@@ -136,16 +136,20 @@ mod tests {
     }
 
     #[test]
-    fn signable_bytes_are_borsh_plus_chain_hash() {
-        // Verify the signed-bytes construction: borsh(unsigned) ++ chain_hash
+    fn signable_bytes_verify_against_public_key() {
+        // Verify that the signed-bytes construction (borsh(unsigned) ++ chain_hash) is correct:
+        // sign with the private key, then verify with the public key.
+        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
         let chain = test_chain();
+        let credential = test_credential();
         let runtime_call = RuntimeCall::Exchange(
             bullet_exchange_interface::message::CallMessage::Public(
                 PublicAction::ApplyFunding { addresses: vec![] },
             ),
         );
         let unsigned = RawUnsignedTransaction {
-            runtime_call: runtime_call.clone(),
+            runtime_call,
             uniqueness: UniquenessData::Generation(12345),
             details: TxDetails {
                 chain_id: chain.chain_id,
@@ -155,12 +159,25 @@ mod tests {
             },
         };
 
-        let mut expected = borsh::to_vec(&unsigned).unwrap();
-        expected.extend_from_slice(&chain.chain_hash);
+        // Build signable bytes: borsh(unsigned) ++ chain_hash
+        let mut signable = borsh::to_vec(&unsigned).unwrap();
+        signable.extend_from_slice(&chain.chain_hash);
 
-        let mut actual = borsh::to_vec(&unsigned).unwrap();
-        actual.extend_from_slice(&chain.chain_hash);
+        // Sign and verify
+        let sig_bytes = credential.sign(&signable);
+        let verifying_key = VerifyingKey::from_bytes(&credential.public_key()).unwrap();
+        let signature = Signature::from_bytes(&sig_bytes);
+        assert!(
+            verifying_key.verify(&signable, &signature).is_ok(),
+            "ed25519 signature must verify against the public key"
+        );
 
-        assert_eq!(actual, expected);
+        // Sanity-check: mutating the signable bytes invalidates the signature
+        let mut tampered = signable.clone();
+        tampered[0] ^= 0xff;
+        assert!(
+            verifying_key.verify(&tampered, &signature).is_err(),
+            "tampered bytes must not verify"
+        );
     }
 }
