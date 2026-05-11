@@ -91,7 +91,12 @@ pub fn parse_optional_decimal(s: Option<&str>) -> Result<Option<Decimal>, Bullet
 // Logic ported from bullet-bots-personal/crates/exchanges/bullet/src/broker.rs:65-71.
 // Bullet's matching engine rejects prices/quantities that are not aligned to tick_size/step_size.
 
-/// Round a price *down* to the nearest tick (for buy orders) or *up* (for sell orders).
+/// Round a price to the nearest tick, conservatively.
+///
+/// - Buy orders round **down**: the limit price never exceeds the intended value, preventing
+///   accidental market-crossing on a post-only bid.
+/// - Sell orders round **up**: the limit price is never below the intended value, preventing
+///   accidental market-crossing on a post-only ask.
 ///
 /// Returns `price` unchanged when `tick_size` is zero or None.
 #[must_use]

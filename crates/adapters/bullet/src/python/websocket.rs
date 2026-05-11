@@ -71,6 +71,15 @@ impl BulletWebSocketClient {
         self.is_connected()
     }
 
+    /// Number of successful connections established (increments on every reconnect).
+    ///
+    /// Compare successive values to detect reconnects, including a disconnect+reconnect
+    /// that completes within a single polling window.
+    #[pyo3(name = "reconnect_count")]
+    fn py_reconnect_count(&self) -> u64 {
+        self.reconnect_count()
+    }
+
     /// Establish the WebSocket connection and start streaming Nautilus data objects to `callback`.
     ///
     /// `instruments` is a list of instrument objects whose precision metadata is needed to parse

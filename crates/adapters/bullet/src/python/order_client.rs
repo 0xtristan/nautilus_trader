@@ -33,6 +33,7 @@ use nautilus_core::python::to_pyruntime_err;
 use pyo3::prelude::*;
 use pyo3_async_runtimes::tokio::future_into_py;
 use rust_decimal::Decimal;
+use zeroize::Zeroizing;
 
 use crate::{
     common::{
@@ -68,8 +69,9 @@ pub struct BulletOrderClient {
     base_url: String,
     timeout_secs: u64,
     proxy_url: Option<String>,
-    private_key: Option<String>,
-    key_file: Option<String>,
+    // Wrapped in Zeroizing so the heap allocation is overwritten on drop.
+    private_key: Option<Zeroizing<String>>,
+    key_file: Option<Zeroizing<String>>,
     account_address: Option<String>,
 }
 
@@ -110,8 +112,8 @@ impl BulletOrderClient {
             base_url,
             timeout_secs,
             proxy_url,
-            private_key,
-            key_file,
+            private_key: private_key.map(Zeroizing::new),
+            key_file: key_file.map(Zeroizing::new),
             account_address,
         }
     }
@@ -124,8 +126,8 @@ impl BulletOrderClient {
         let base_url = self.base_url.clone();
         let timeout_secs = self.timeout_secs;
         let proxy_url = self.proxy_url.clone();
-        let private_key = self.private_key.clone();
-        let key_file = self.key_file.clone();
+        let private_key: Option<Zeroizing<String>> = self.private_key.clone();
+        let key_file: Option<Zeroizing<String>> = self.key_file.clone();
         let account_address = self.account_address.clone();
         let state = self.state.clone();
 
@@ -133,8 +135,10 @@ impl BulletOrderClient {
             let http = BulletHttpClient::new(&base_url, timeout_secs, proxy_url)
                 .map_err(to_pyruntime_err)?;
 
-            let creds =
-                BulletCredential::resolve(private_key.as_deref(), key_file.as_deref())
+            let creds = BulletCredential::resolve(
+                private_key.as_ref().map(|s| s.as_str()),
+                key_file.as_ref().map(|s| s.as_str()),
+            )
                     .map_err(to_pyruntime_err)?;
 
             let main_addr = account_address.unwrap_or_else(|| creds.address());

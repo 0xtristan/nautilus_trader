@@ -176,6 +176,7 @@ def _create_ws_mock() -> MagicMock:
     mock.url = "wss://tradingapi.testnet.bullet.xyz/ws"
     mock.is_connected = MagicMock(return_value=True)
     mock.is_started = MagicMock(return_value=True)
+    mock.reconnect_count = MagicMock(return_value=0)
     mock.connect = AsyncMock()
     mock.close = AsyncMock()
     mock.wait_until_active = AsyncMock()

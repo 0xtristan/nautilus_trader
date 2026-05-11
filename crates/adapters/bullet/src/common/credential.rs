@@ -67,9 +67,9 @@ impl BulletCredential {
         let mut secret = [0u8; 32];
         secret.copy_from_slice(&bytes);
         bytes.zeroize();
-        Ok(Self {
-            signing_key: SigningKey::from_bytes(&secret),
-        })
+        let signing_key = SigningKey::from_bytes(&secret);
+        secret.zeroize();
+        Ok(Self { signing_key })
     }
 
     /// Load from a base58-encoded key.
@@ -97,9 +97,9 @@ impl BulletCredential {
             }
         }
         bytes.zeroize();
-        Ok(Self {
-            signing_key: SigningKey::from_bytes(&secret),
-        })
+        let signing_key = SigningKey::from_bytes(&secret);
+        secret.zeroize();
+        Ok(Self { signing_key })
     }
 
     /// Load from a string that may be hex or base58.
@@ -144,9 +144,9 @@ impl BulletCredential {
         let mut secret = [0u8; 32];
         secret.copy_from_slice(&bytes[..32]);
         bytes.zeroize();
-        Ok(Self {
-            signing_key: SigningKey::from_bytes(&secret),
-        })
+        let signing_key = SigningKey::from_bytes(&secret);
+        secret.zeroize();
+        Ok(Self { signing_key })
     }
 
     /// Resolve credential from config fields and environment variables.

@@ -73,6 +73,10 @@ pub struct BulletWebSocketClient {
     running: Arc<AtomicBool>,
     /// Set to stop the reconnect loop on next iteration.
     stop_flag: Arc<AtomicBool>,
+    /// Incremented each time a new WS connection is established.
+    /// Callers can compare successive values to detect reconnects (including
+    /// disconnect+reconnect within a single polling interval).
+    connect_count: Arc<AtomicU64>,
     /// Per-symbol instrument cache for precision lookup.
     instruments: Arc<std::sync::Mutex<HashMap<Ustr, InstrumentAny>>>,
 }
@@ -90,6 +94,7 @@ impl BulletWebSocketClient {
             started: Arc::new(AtomicBool::new(false)),
             running: Arc::new(AtomicBool::new(false)),
             stop_flag: Arc::new(AtomicBool::new(false)),
+            connect_count: Arc::new(AtomicU64::new(0)),
             instruments: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
@@ -110,6 +115,15 @@ impl BulletWebSocketClient {
     #[must_use]
     pub fn is_connected(&self) -> bool {
         self.running.load(Ordering::Relaxed)
+    }
+
+    /// Returns the number of successful WS connections established since this client was created.
+    ///
+    /// Callers can poll this and compare to a saved value to detect reconnects, including
+    /// a disconnect+reconnect that completes within a single polling interval.
+    #[must_use]
+    pub fn reconnect_count(&self) -> u64 {
+        self.connect_count.load(Ordering::Relaxed)
     }
 
     /// Cache a single instrument keyed by its raw Bullet symbol (e.g. `"SOL-USD"`).
@@ -170,6 +184,7 @@ impl BulletWebSocketClient {
         let running = Arc::clone(&self.running);
         let started = Arc::clone(&self.started);
         let stop_flag = Arc::clone(&self.stop_flag);
+        let connect_count = Arc::clone(&self.connect_count);
 
         tokio::spawn(async move {
             // Ensure a TLS crypto provider is registered when both aws-lc-rs and ring
@@ -211,6 +226,7 @@ impl BulletWebSocketClient {
                         }
 
                         running.store(true, Ordering::Relaxed);
+                        connect_count.fetch_add(1, Ordering::Relaxed);
                         tracing::info!(url = %url, "Bullet WS connected");
 
                         // Oneshot: write task signals the read loop when the sink fails.

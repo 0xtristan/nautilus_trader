@@ -1031,18 +1031,17 @@ async def test_batch_cancel_groups_by_symbol(
 async def test_reconnect_monitor_refreshes_account_on_reconnect(
     exec_client_builder, monkeypatch, cache
 ):
-    """Monitor detects disconnected→connected transition and calls _update_account_state."""
+    """Monitor detects reconnect via counter increment and calls _update_account_state."""
     client, ws_client, _, _ = exec_client_builder(monkeypatch)
     await client._connect()
 
     address = client._order_client.account_address
 
     with patch.object(client, "_update_account_state", new_callable=AsyncMock) as mock_update:
-        # Simulate: was disconnected, now reconnected
-        ws_client.is_connected.return_value = True
-        was_connected = False
-        now_connected = ws_client.is_connected()
-        if not was_connected and now_connected:
+        last_count = 0
+        current_count = 1  # Simulate counter incremented by Rust on reconnect
+        ws_client.reconnect_count.return_value = current_count
+        if current_count != last_count:
             await client._update_account_state(address)
 
         mock_update.assert_awaited_once_with(address)
@@ -1054,17 +1053,17 @@ async def test_reconnect_monitor_refreshes_account_on_reconnect(
 async def test_reconnect_monitor_no_refresh_when_stable(
     exec_client_builder, monkeypatch, cache
 ):
-    """No account refresh when connection stays up."""
+    """No account refresh when reconnect counter stays the same."""
     client, ws_client, _, _ = exec_client_builder(monkeypatch)
     await client._connect()
 
     address = client._order_client.account_address
 
     with patch.object(client, "_update_account_state", new_callable=AsyncMock) as mock_update:
-        ws_client.is_connected.return_value = True
-        was_connected = True
-        now_connected = ws_client.is_connected()
-        if not was_connected and now_connected:
+        last_count = 1
+        current_count = 1  # No change — connection stable
+        ws_client.reconnect_count.return_value = current_count
+        if current_count != last_count:
             await client._update_account_state(address)
 
         mock_update.assert_not_awaited()
@@ -1127,7 +1126,7 @@ async def test_cancel_replace_amend_emits_order_updated(
     client_order_id, _, order = _setup_order_in_cache(client, cache, instrument, cloid_int=42)
 
     # Mark the order as pending amend (as _modify_order would)
-    client._pending_amend_cloids.add(client_order_id.value)
+    client._pending_amend_cloids[client_order_id.value] = 1
 
     with (
         patch.object(client, "generate_order_canceled") as mock_canceled,
@@ -1159,5 +1158,154 @@ async def test_cancel_replace_amend_emits_order_updated(
         assert call_kwargs["price"] == Price.from_str("89.00")
         assert call_kwargs["quantity"] == Quantity.from_str("0.02")
 
-    # Pending set cleared after the replacement is processed
+    # Pending dict cleared after the replacement is processed
     assert client_order_id.value not in client._pending_amend_cloids
+
+
+@pytest.mark.asyncio
+async def test_amend_fill_before_new_emits_order_updated_then_filled(
+    exec_client_builder, monkeypatch, instrument, cache
+):
+    """If the replacement fills immediately (no NEW), OrderUpdated fires before the fill."""
+    client, _, _, _ = exec_client_builder(monkeypatch)
+    cache.add_instrument(instrument)
+    client_order_id, _, order = _setup_order_in_cache(client, cache, instrument, cloid_int=42)
+
+    client._pending_amend_cloids[client_order_id.value] = 1
+
+    with (
+        patch.object(client, "generate_order_updated") as mock_updated,
+        patch.object(client, "generate_order_filled") as mock_filled,
+    ):
+        fill_msg = _make_order_update(
+            "SOL-USD", 85000001, 42, "FILLED",
+            price="89.00", qty="0.01",
+            last_fill_qty="0.01", last_fill_price="89.00",
+        )
+        client._handle_msg(fill_msg)
+
+        mock_updated.assert_called_once()
+        upd_kwargs = mock_updated.call_args.kwargs
+        assert upd_kwargs["venue_order_id_modified"] is True
+        mock_filled.assert_called_once()
+        assert client_order_id.value not in client._pending_amend_cloids
+
+
+@pytest.mark.asyncio
+async def test_double_amend_counter_prevents_premature_cancel(
+    exec_client_builder, monkeypatch, instrument, cache
+):
+    """Two concurrent amends: first replacement NEW should not clear suppression for second."""
+    client, _, _, _ = exec_client_builder(monkeypatch)
+    cache.add_instrument(instrument)
+    client_order_id, _, _ = _setup_order_in_cache(client, cache, instrument, cloid_int=42)
+
+    # Simulate two in-flight amends
+    client._pending_amend_cloids[client_order_id.value] = 2
+
+    with (
+        patch.object(client, "generate_order_canceled") as mock_canceled,
+        patch.object(client, "generate_order_updated") as _,
+    ):
+        # First CANCELED (first amend's old order) — should be suppressed
+        canceled_msg = _make_order_update("SOL-USD", 85000001, 42, "CANCELED")
+        client._handle_msg(canceled_msg)
+        mock_canceled.assert_not_called()
+
+        # First replacement NEW — decrements counter to 1, still pending
+        new_msg = _make_order_update("SOL-USD", 85000002, 42, "NEW")
+        client._handle_msg(new_msg)
+        assert client._pending_amend_cloids.get(client_order_id.value, 0) == 1
+
+        # Second CANCELED — still suppressed (counter = 1)
+        canceled_msg2 = _make_order_update("SOL-USD", 85000002, 42, "CANCELED")
+        client._handle_msg(canceled_msg2)
+        mock_canceled.assert_not_called()
+
+        # Second replacement NEW — decrements counter to 0, cleared
+        new_msg2 = _make_order_update("SOL-USD", 85000003, 42, "NEW")
+        client._handle_msg(new_msg2)
+        assert client_order_id.value not in client._pending_amend_cloids
+
+
+@pytest.mark.asyncio
+async def test_cancel_order_no_ids_emits_cancel_rejected(
+    exec_client_builder, monkeypatch, instrument, cache
+):
+    """Cancel with no venue_order_id and no cloid mapping emits OrderCancelRejected."""
+    client, _, _, order_client = exec_client_builder(monkeypatch)
+    cache.add_instrument(instrument)
+    await client._connect()
+
+    order = LimitOrder(
+        trader_id=TestIdStubs.trader_id(),
+        strategy_id=TestIdStubs.strategy_id(),
+        instrument_id=instrument.id,
+        client_order_id=ClientOrderId("O-NOID-001"),
+        order_side=OrderSide.BUY,
+        quantity=Quantity.from_str("0.01"),
+        price=Price.from_str("90.00"),
+        init_id=TestIdStubs.uuid(),
+        ts_init=0,
+    )
+    cache.add_order(order, None)
+    # Deliberately do NOT populate _nt_to_cloid so client_order_id_int is None
+    # and command.venue_order_id is also None
+
+    command = CancelOrder(
+        trader_id=order.trader_id,
+        strategy_id=order.strategy_id,
+        instrument_id=order.instrument_id,
+        client_order_id=order.client_order_id,
+        venue_order_id=None,
+        command_id=TestIdStubs.uuid(),
+        ts_init=0,
+    )
+
+    with patch.object(client, "generate_order_cancel_rejected") as mock_reject:
+        try:
+            await client._cancel_order(command)
+        finally:
+            await client._disconnect()
+
+    mock_reject.assert_called_once()
+    order_client.cancel_order.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generate_order_status_reports_partially_filled(
+    exec_client_builder, monkeypatch, instrument, cache
+):
+    """PARTIALLY_FILLED open orders are reported with correct status."""
+    client, _, http_client, _ = exec_client_builder(monkeypatch)
+    cache.add_instrument(instrument)
+
+    orders_json = json.dumps([{
+        "orderId": 85000001,
+        "clientOrderId": 42,
+        "side": "BUY",
+        "origQty": "0.01",
+        "executedQty": "0.005",
+        "price": "90.00",
+        "type": "LIMIT",
+        "status": "PARTIALLY_FILLED",
+        "updateTime": 1_000_000,
+    }])
+    http_client.open_orders_json = AsyncMock(side_effect=lambda addr, sym: (
+        orders_json if sym == "SOL-USD" else "[]"
+    ))
+
+    from nautilus_trader.model.enums import OrderStatus as OS
+    command = GenerateOrderStatusReports(
+        instrument_id=instrument.id,
+        start=None,
+        end=None,
+        open_only=True,
+        command_id=TestIdStubs.uuid(),
+        ts_init=0,
+    )
+
+    reports = await client.generate_order_status_reports(command)
+    sol_reports = [r for r in reports if r.instrument_id == instrument.id]
+    assert len(sol_reports) == 1
+    assert sol_reports[0].order_status == OS.PARTIALLY_FILLED
