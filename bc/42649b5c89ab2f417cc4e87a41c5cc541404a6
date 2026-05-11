@@ -1,0 +1,59 @@
+nautilus_trader/adapters/bullet/execution.py
+  s_1dd937952a64f8::t_6e213aaecf9f0e 388-394
+  s_1dd937952a64f8::t_f41ebb1f401a22 700
+  s_1dd937952a64f8::t_b3d7901a62dc25 536-537,551
+  s_1dd937952a64f8::t_5d68536acc0c7c 702-707,717
+  s_1dd937952a64f8::t_a31c95a0608a03 771
+  s_1dd937952a64f8::t_3ed8bc3ceb724e 140-143
+  s_1dd937952a64f8::t_1ba28ada5ab77f 278
+  s_1dd937952a64f8::t_95613221c49807 181-183,187-188,191
+  s_1dd937952a64f8::t_dbc1ea4019500d 376
+  s_1dd937952a64f8::t_210ab0037621df 638
+  s_1dd937952a64f8::t_b5aae3ff43dc17 489-501
+  s_1dd937952a64f8::t_206a589ab5433c 639-644,653
+  s_1dd937952a64f8::t_f986419ce45e58 309-333
+  s_1dd937952a64f8::t_64e2acc084ae76 359-360
+  s_1dd937952a64f8::t_3b0de420e03c4d 134-135
+crates/adapters/bullet/src/websocket/client.rs
+  s_1dd937952a64f8::t_84c579ea8f0a87 76-79
+  s_1dd937952a64f8::t_7b91a5a3c4df71 120-128
+  s_1dd937952a64f8::t_8bea679839228d 229
+  s_1dd937952a64f8::t_a1815cd650a304 97
+  s_1dd937952a64f8::t_bf5063b1a82046 187
+crates/adapters/bullet/src/python/order_client.rs
+  s_1dd937952a64f8::t_15722594c14dfe 138-141
+  s_1dd937952a64f8::t_17d573fbdd764d 36
+  s_1dd937952a64f8::t_a8920dff42681a 72-74
+  s_1dd937952a64f8::t_516c8e38eaabe7 129-130
+  s_1dd937952a64f8::t_c04ac00ce424ad 115-116
+crates/adapters/bullet/src/common/credential.rs
+  s_1dd937952a64f8::t_0211c040df99a6 70-72
+  s_1dd937952a64f8::t_5edbfb608d01c7 100-102
+  s_1dd937952a64f8::t_0d743ba9255f4b 147-149
+crates/adapters/bullet/src/python/websocket.rs
+  s_1dd937952a64f8::t_563eeddba04f4a 74-82
+tests/integration_tests/adapters/bullet/test_execution.py
+  s_1dd937952a64f8::t_5d1eb4cacd671d 1129
+  s_1dd937952a64f8::t_91afd8dc89b7dd 1161,1163-1311
+  s_1dd937952a64f8::t_598b393b7ebe75 1034,1041-1044,1056,1063-1066
+crates/adapters/bullet/src/common/parse.rs
+  s_1dd937952a64f8::t_284daa1d18701a 94-99
+tests/integration_tests/adapters/bullet/conftest.py
+  s_1dd937952a64f8::t_2edf15f725214d 179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "bc42649b5c89ab2f417cc4e87a41c5cc541404a6",
+  "prompts": {},
+  "sessions": {
+    "s_1dd937952a64f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "82831db1-a146-4d4b-b505-da473042cf59",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
