@@ -1,0 +1,54 @@
+nautilus_trader/adapters/bullet/execution.py
+  s_1dd937952a64f8::t_6475e29a571921 437-443
+  s_1dd937952a64f8::t_6798fe817eb335 144-147
+  s_1dd937952a64f8::t_11eab1764593a3 373-375
+  s_1dd937952a64f8::t_7914b54ec57f70 703,711
+  s_1dd937952a64f8::t_caeac7b1c11ae9 767,776
+  s_1dd937952a64f8::t_e7a9b109609f97 158-162
+  s_1dd937952a64f8::t_4e5e1f7fdcdae4 344-345,352
+  s_1dd937952a64f8::t_45f3a171d2f9db 168-172,174-176
+  s_1dd937952a64f8::t_7433f79965c9ad 366
+  s_1dd937952a64f8::t_d0e28b9e3499bb 450
+  s_1dd937952a64f8::t_f92f6b18d0f373 397
+  s_1dd937952a64f8::t_60b7543493f625 558-570
+  s_1dd937952a64f8::t_ca7c8f8fb9fad8 571-581,594,599-602
+  s_1dd937952a64f8::t_51309d5ac88d11 391-396
+nautilus_trader/adapters/bullet/data.py
+  s_1dd937952a64f8::t_202f016f11fa14 111-114
+crates/adapters/bullet/src/websocket/client.rs
+  s_1dd937952a64f8::t_ca350efce1af57 333
+  s_1dd937952a64f8::t_07124b97bbfb20 329-331,340-345
+  s_1dd937952a64f8::t_259e055c67ce5f 288,300
+  s_1dd937952a64f8::t_51acf8770d6e9c 101
+  s_1dd937952a64f8::t_26e578c56458d2 311-316
+  s_1dd937952a64f8::t_8fd83b23c908ef 104
+  s_1dd937952a64f8::t_481667037c8828 193
+  s_1dd937952a64f8::t_88b6eb8dfd4d0c 204
+  s_1dd937952a64f8::t_c811dc0991ba42 338-339
+  s_1dd937952a64f8::t_ae42eed8d9cf2e 76-77
+  s_1dd937952a64f8::t_4be19801ef47e4 84-85
+  s_1dd937952a64f8::t_390e63441911cf 34
+crates/adapters/bullet/src/websocket/parse.rs
+  s_1dd937952a64f8::t_204cf1c403efe6 141-143,163,184-189
+crates/adapters/bullet/src/signing/uniqueness.rs
+  s_1dd937952a64f8::t_cc7133dc8b5d22 22,25-32,39,42-53
+crates/adapters/bullet/src/python/websocket.rs
+  s_1dd937952a64f8::t_a4ea3d1540cfc0 267-270
+  s_1dd937952a64f8::t_99760cd26ed74a 109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "17844c3ce2a7c8c3aba71c5299d3469e71f20191",
+  "prompts": {},
+  "sessions": {
+    "s_1dd937952a64f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "82831db1-a146-4d4b-b505-da473042cf59",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
