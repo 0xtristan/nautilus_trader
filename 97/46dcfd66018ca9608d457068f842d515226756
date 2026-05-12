@@ -1,0 +1,24 @@
+nautilus_trader/adapters/bullet/providers.py
+  s_1dd937952a64f8::t_ae061a773283e1 18
+  s_1dd937952a64f8::t_18542a307b6c06 218-219
+  s_1dd937952a64f8::t_126c98614030e3 226-232
+nautilus_trader/adapters/bullet/execution.py
+  s_1dd937952a64f8::t_a225e5210a2796 384
+  s_1dd937952a64f8::t_11d0d288ea8fad 587-592
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.4",
+  "base_commit_sha": "9746dcfd66018ca9608d457068f842d515226756",
+  "prompts": {},
+  "sessions": {
+    "s_1dd937952a64f8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "82831db1-a146-4d4b-b505-da473042cf59",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Tristan <34117851+0xtristan@users.noreply.github.com>"
+    }
+  }
+}
