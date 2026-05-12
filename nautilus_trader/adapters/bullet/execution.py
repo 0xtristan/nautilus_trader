@@ -381,7 +381,7 @@ class BulletExecutionClient(LiveExecutionClient):
                 strategy_id=order.strategy_id,
                 instrument_id=instrument_id,
                 client_order_id=client_order_id,
-                reason=data.get("cancelReason") or data.get("executionType", "REJECTED"),
+                reason=data.get("executionType", "REJECTED"),
                 ts_event=ts_event,
             )
 
@@ -584,6 +584,12 @@ class BulletExecutionClient(LiveExecutionClient):
                 except (ValueError, AttributeError):
                     pass
             cloid_int: int | None = self._nt_to_cloid.get(cancel.client_order_id.value)
+            if venue_id is None and cloid_int is None:
+                self._log.warning(
+                    f"Cannot batch-cancel {cancel.client_order_id}: "
+                    "no venue_order_id or client_order_id available"
+                )
+                continue
             by_symbol.setdefault(bullet_symbol, []).append((venue_id, cloid_int))
 
         for symbol, pairs in by_symbol.items():

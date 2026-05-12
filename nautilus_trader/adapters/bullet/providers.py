@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from decimal import Decimal
@@ -214,12 +215,21 @@ class BulletInstrumentProvider(InstrumentProvider):
         self._client: nautilus_pyo3.BulletHttpClient = client
         self._client_id = client_id
         self._instruments_pyo3: list[nautilus_pyo3.CryptoPerpetual] = []
+        self._load_lock: asyncio.Lock = asyncio.Lock()
+        self._loaded: bool = False
 
     def instruments_pyo3(self) -> list[nautilus_pyo3.CryptoPerpetual]:
         """Return PyO3 instruments (needed by the WebSocket client for precision metadata)."""
         return list(self._instruments_pyo3)
 
     async def load_all_async(self, filters: dict | None = None) -> None:
+        async with self._load_lock:
+            if self._loaded:
+                return
+            await self._do_load(filters)
+            self._loaded = True
+
+    async def _do_load(self, filters: dict | None = None) -> None:
         self._log.info("Loading Bullet instruments...")
 
         raw_json = await self._client.exchange_info_json()
