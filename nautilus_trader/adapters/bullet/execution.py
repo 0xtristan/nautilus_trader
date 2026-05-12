@@ -141,6 +141,10 @@ class BulletExecutionClient(LiveExecutionClient):
         # Using a counter (not a set) handles rapid double-amends: a second amend before the
         # first replacement NEW arrives must not clear the suppression prematurely.
         self._pending_amend_cloids: dict[str, int] = {}
+        # Per-venue-order fill sequence counter for unique TradeId construction.
+        # Two fills for the same order can arrive at the same microsecond; appending a
+        # monotonic sequence number guarantees uniqueness within a session.
+        self._fill_counters: dict[int, int] = {}
 
     @property
     def instrument_provider(self) -> BulletInstrumentProvider:
@@ -151,21 +155,25 @@ class BulletExecutionClient(LiveExecutionClient):
         await self._order_client.connect()
 
         address = self._order_client.account_address
+        if not address:
+            raise RuntimeError(
+                "No account address configured — cannot start execution client. "
+                "Set BULLET_ACCOUNT_ADDRESS or provide account_address in BulletExecClientConfig."
+            )
         self._log.info(f"Connected order client. Account: {address}", LogColor.BLUE)
 
         await self._update_account_state(address)
         await self._await_account_registered()
 
-        if address:
-            instruments = self.instrument_provider.instruments_pyo3()
-            await self._ws_client.connect(self._loop, instruments, self._handle_msg)
-            await self._ws_client.wait_until_active(10.0)
-            await self._ws_client.subscribe_order_updates(address)
-            self._log.info(f"Subscribed to order updates for {address}", LogColor.BLUE)
+        instruments = self.instrument_provider.instruments_pyo3()
+        await self._ws_client.connect(self._loop, instruments, self._handle_msg)
+        await self._ws_client.wait_until_active(10.0)
+        await self._ws_client.subscribe_order_updates(address)
+        self._log.info(f"Subscribed to order updates for {address}", LogColor.BLUE)
 
-            self._reconnect_task = self._loop.create_task(
-                self._reconnect_monitor(address)
-            )
+        self._reconnect_task = self._loop.create_task(
+            self._reconnect_monitor(address)
+        )
 
     async def _disconnect(self) -> None:
         if self._reconnect_task is not None:
@@ -333,13 +341,15 @@ class BulletExecutionClient(LiveExecutionClient):
                 )
             if last_fill_qty > 0 and last_fill_price > 0:
                 order_side = OrderSide.BUY if side == "BUY" else OrderSide.SELL
+                fill_seq = self._fill_counters.get(order_id, 0) + 1
+                self._fill_counters[order_id] = fill_seq
                 self.generate_order_filled(
                     strategy_id=order.strategy_id,
                     instrument_id=instrument_id,
                     client_order_id=client_order_id,
                     venue_order_id=venue_order_id,
                     venue_position_id=None,
-                    trade_id=TradeId(f"{order_id}-{ts_event}"),
+                    trade_id=TradeId(f"{order_id}-{fill_seq}"),
                     order_side=order_side,
                     order_type=order.order_type,
                     last_qty=Quantity(float(last_fill_qty), instrument.size_precision),
@@ -353,12 +363,16 @@ class BulletExecutionClient(LiveExecutionClient):
                 cloid_int = self._nt_to_cloid.pop(client_order_id.value, None)
                 if cloid_int is not None:
                     self._cloid_map.pop(cloid_int, None)
+                self._fill_counters.pop(order_id, None)
 
         elif status == "CANCELED":
             if client_order_id.value in self._pending_amend_cloids:
                 # Suppress: cancel-replace removed the old order; the replacement is en route.
                 # Do NOT decrement here — the replacement NEW (or fill) will decrement.
                 # Keep cloid maps intact so the replacement can be resolved by clientOrderId.
+                # Clean up any fill counter for the old order_id — the replacement will get
+                # a new venue order_id and its own counter entry.
+                self._fill_counters.pop(order_id, None)
                 self._log.debug(f"Suppressing CANCELED for pending amend: {client_order_id}")
                 return
             cloid_int = self._nt_to_cloid.pop(client_order_id.value, None)
@@ -374,9 +388,13 @@ class BulletExecutionClient(LiveExecutionClient):
 
         elif status == "REJECTED":
             self._decrement_pending_amend(client_order_id.value)
-            cloid_int = self._nt_to_cloid.pop(client_order_id.value, None)
-            if cloid_int is not None:
-                self._cloid_map.pop(cloid_int, None)
+            # Only clean up maps if no further amends are in flight — a second replacement
+            # may still arrive and needs the cloid maps to resolve its WS event.
+            if client_order_id.value not in self._pending_amend_cloids:
+                cloid_int = self._nt_to_cloid.pop(client_order_id.value, None)
+                if cloid_int is not None:
+                    self._cloid_map.pop(cloid_int, None)
+                self._fill_counters.pop(order_id, None)
             self.generate_order_rejected(
                 strategy_id=order.strategy_id,
                 instrument_id=instrument_id,
@@ -416,14 +434,20 @@ class BulletExecutionClient(LiveExecutionClient):
             OrderType.LIMIT_IF_TOUCHED,
             OrderType.STOP_LIMIT,
         )
-        price_str = str(order.price) if hasattr(order, "price") and order.price else "1"  # type: ignore[attr-defined]
+        # For market/IOC orders without a price, use a side-aware aggressive sentinel so
+        # the order crosses the book rather than sitting at $1 (catastrophic for sells).
+        price_str = (  # type: ignore[attr-defined]
+            str(order.price)
+            if hasattr(order, "price") and order.price
+            else ("999999999" if is_buy else "0.001")
+        )
         qty_str = str(order.quantity)  # type: ignore[attr-defined]
 
         client_order_id: ClientOrderId = order.client_order_id  # type: ignore[attr-defined]
 
         # Use an auto-incrementing integer as the venue cloid (NT ClientOrderId is not a u64)
         cloid_int = self._next_cloid
-        self._next_cloid += 1
+        self._next_cloid = (self._next_cloid + 1) % (2**32)
         # Cache mappings before REST call — WS may fire status=NEW before REST returns
         self._cloid_map[cloid_int] = client_order_id
         self._nt_to_cloid[client_order_id.value] = cloid_int
@@ -531,6 +555,30 @@ class BulletExecutionClient(LiveExecutionClient):
         new_price = str(command.price) if command.price else str(order.price)
         new_qty = str(command.quantity) if command.quantity else str(order.quantity)
 
+        if venue_order_id is None and client_order_id_int is None:
+            reason = "No venue_order_id or client_order_id available for amend"
+            self._log.error(f"Cannot amend {command.client_order_id}: {reason}")
+            self.generate_order_modify_rejected(
+                strategy_id=command.strategy_id,
+                instrument_id=command.instrument_id,
+                client_order_id=command.client_order_id,
+                venue_order_id=command.venue_order_id,
+                reason=reason,
+                ts_event=self._clock.timestamp_ns(),
+            )
+            return
+
+        # If we have no session-local numeric cloid for this order (e.g. the order was
+        # loaded from a prior session via reconciliation), allocate a fresh one so the
+        # replacement order's WS event can be resolved back to this NT ClientOrderId.
+        # Without a new_client_order_id the replacement arrives with null clientOrderId,
+        # making _cloid_map lookup fail and silently dropping generate_order_updated.
+        new_cloid: int = client_order_id_int if client_order_id_int is not None else self._next_cloid
+        if client_order_id_int is None:
+            self._next_cloid = (self._next_cloid + 1) % (2**32)
+            self._cloid_map[new_cloid] = command.client_order_id
+            self._nt_to_cloid[command.client_order_id.value] = new_cloid
+
         # Register before the await — the CANCELED for the old order can arrive before
         # amend_order returns if the exchange processes it synchronously.
         cloid_str = command.client_order_id.value
@@ -543,11 +591,15 @@ class BulletExecutionClient(LiveExecutionClient):
                 client_order_id=client_order_id_int,
                 new_price=new_price,
                 new_qty=new_qty,
-                new_client_order_id=client_order_id_int,
+                new_client_order_id=new_cloid,
                 reduce_only=getattr(order, "is_reduce_only", False),
             )
             self._log.info(f"Amend submitted: tx_id={tx_id}")
         except Exception as e:
+            # Clean up the freshly allocated cloid if we created one and the amend failed.
+            if client_order_id_int is None:
+                self._cloid_map.pop(new_cloid, None)
+                self._nt_to_cloid.pop(command.client_order_id.value, None)
             self._decrement_pending_amend(cloid_str)
             self._log.error(f"Failed to amend order {command.client_order_id}: {e}")
 
@@ -648,6 +700,7 @@ class BulletExecutionClient(LiveExecutionClient):
                     if raw_status == "PARTIALLY_FILLED"
                     else OrderStatus.ACCEPTED
                 )
+                _TIF_MAP = {"GTC": TimeInForce.GTC, "IOC": TimeInForce.IOC, "FOK": TimeInForce.FOK}
                 return OrderStatusReport(
                     account_id=self.account_id,
                     instrument_id=command.instrument_id,
@@ -655,7 +708,7 @@ class BulletExecutionClient(LiveExecutionClient):
                     client_order_id=client_order_id,
                     order_side=side,
                     order_type=OrderType.LIMIT if o.get("type") == "LIMIT" else OrderType.MARKET,
-                    time_in_force=TimeInForce.GTC,
+                    time_in_force=_TIF_MAP.get(o.get("timeInForce", "GTC"), TimeInForce.GTC),
                     order_status=order_status,
                     quantity=qty,
                     filled_qty=filled,
@@ -711,6 +764,7 @@ class BulletExecutionClient(LiveExecutionClient):
                         if raw_status == "PARTIALLY_FILLED"
                         else OrderStatus.ACCEPTED
                     )
+                    _TIF_MAP = {"GTC": TimeInForce.GTC, "IOC": TimeInForce.IOC, "FOK": TimeInForce.FOK}
                     reports.append(
                         OrderStatusReport(
                             account_id=self.account_id,
@@ -719,7 +773,7 @@ class BulletExecutionClient(LiveExecutionClient):
                             client_order_id=client_order_id,
                             order_side=side,
                             order_type=OrderType.LIMIT if o.get("type") == "LIMIT" else OrderType.MARKET,
-                            time_in_force=TimeInForce.GTC,
+                            time_in_force=_TIF_MAP.get(o.get("timeInForce", "GTC"), TimeInForce.GTC),
                             order_status=order_status,
                             quantity=qty,
                             filled_qty=filled,

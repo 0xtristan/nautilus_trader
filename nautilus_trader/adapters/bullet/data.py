@@ -108,9 +108,10 @@ class BulletDataClient(LiveMarketDataClient):
         self._log.info(f"Connected to WebSocket {self._ws_client.url}", LogColor.BLUE)
 
     async def _disconnect(self) -> None:
-        if self._ws_client.is_connected():
-            await self._ws_client.close()
-            self._log.info("WebSocket closed")
+        # Always call close() — it sets stop_flag on the Rust reconnect loop unconditionally.
+        # Guarding on is_connected() would leak the loop when it's between reconnect attempts.
+        await self._ws_client.close()
+        self._log.info("WebSocket closed")
 
     def _send_all_instruments_to_data_engine(self) -> None:
         for instrument in self.instrument_provider.get_all().values():

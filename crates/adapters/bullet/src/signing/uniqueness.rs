@@ -19,18 +19,36 @@
 //! Multiple transactions can be in-flight concurrently; the only requirement is that
 //! each timestamp is distinct within a ~5-6 second block window.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Return a microsecond-resolution Unix timestamp suitable for use as a
-/// `UniquenessData::Generation` value.
+static LAST_NONCE: AtomicU64 = AtomicU64::new(0);
+
+/// Return a strictly-monotonic microsecond-resolution value suitable for use as a
+/// `UniquenessData::Generation` nonce.
+///
+/// If the wall clock hasn't advanced since the last call (or concurrent callers land in
+/// the same microsecond), the returned value is incremented beyond the clock value so
+/// every call within a process returns a unique nonce.
 ///
 /// # Panics
 ///
 /// Panics if the system clock is set before the Unix epoch (should never happen in practice).
 #[must_use]
 pub fn generation_nonce() -> u64 {
-    SystemTime::now()
+    let micros = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time before Unix epoch")
-        .as_micros() as u64
+        .as_micros() as u64;
+
+    loop {
+        let last = LAST_NONCE.load(Ordering::Relaxed);
+        let next = if micros > last { micros } else { last + 1 };
+        if LAST_NONCE
+            .compare_exchange(last, next, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return next;
+        }
+    }
 }

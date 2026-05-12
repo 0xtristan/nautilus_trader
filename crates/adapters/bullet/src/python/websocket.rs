@@ -106,7 +106,7 @@ impl BulletWebSocketClient {
         future_into_py(py, async move {
             client.connect().await.map_err(to_pyruntime_err)?;
 
-            get_runtime().spawn(async move {
+            let handle = get_runtime().spawn(async move {
                 let clock = get_atomic_clock_realtime();
 
                 loop {
@@ -263,6 +263,10 @@ impl BulletWebSocketClient {
                     }
                 }
             });
+
+            if let Ok(mut guard) = client.dispatch_handle.lock() {
+                *guard = Some(handle);
+            }
 
             Ok(())
         })

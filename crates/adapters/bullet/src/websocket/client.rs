@@ -31,7 +31,7 @@ use std::{
 
 use futures_util::{SinkExt, StreamExt as _};
 use nautilus_model::instruments::{Instrument, InstrumentAny};
-use tokio::sync::{mpsc, Mutex as AsyncMutex};
+use tokio::sync::{Notify, mpsc, Mutex as AsyncMutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use ustr::Ustr;
 
@@ -73,12 +73,16 @@ pub struct BulletWebSocketClient {
     running: Arc<AtomicBool>,
     /// Set to stop the reconnect loop on next iteration.
     stop_flag: Arc<AtomicBool>,
+    /// Notified by `disconnect()` to interrupt the back-off sleep immediately.
+    stop_notify: Arc<Notify>,
     /// Incremented each time a new WS connection is established.
     /// Callers can compare successive values to detect reconnects (including
     /// disconnect+reconnect within a single polling interval).
     connect_count: Arc<AtomicU64>,
     /// Per-symbol instrument cache for precision lookup.
     instruments: Arc<std::sync::Mutex<HashMap<Ustr, InstrumentAny>>>,
+    /// Handle for the Python-side dispatch task; aborted on `disconnect()`.
+    pub dispatch_handle: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl BulletWebSocketClient {
@@ -94,8 +98,10 @@ impl BulletWebSocketClient {
             started: Arc::new(AtomicBool::new(false)),
             running: Arc::new(AtomicBool::new(false)),
             stop_flag: Arc::new(AtomicBool::new(false)),
+            stop_notify: Arc::new(Notify::new()),
             connect_count: Arc::new(AtomicU64::new(0)),
             instruments: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            dispatch_handle: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -184,6 +190,7 @@ impl BulletWebSocketClient {
         let running = Arc::clone(&self.running);
         let started = Arc::clone(&self.started);
         let stop_flag = Arc::clone(&self.stop_flag);
+        let stop_notify = Arc::clone(&self.stop_notify);
         let connect_count = Arc::clone(&self.connect_count);
 
         tokio::spawn(async move {
@@ -194,7 +201,7 @@ impl BulletWebSocketClient {
             let mut delay = Duration::from_millis(250);
 
             'outer: loop {
-                if stop_flag.load(Ordering::Relaxed) {
+                if stop_flag.load(Ordering::Acquire) {
                     break;
                 }
 
@@ -278,7 +285,7 @@ impl BulletWebSocketClient {
                                     }
                                 }
                             }
-                            if stop_flag.load(Ordering::Relaxed) {
+                            if stop_flag.load(Ordering::Acquire) {
                                 break;
                             }
                         }
@@ -290,7 +297,7 @@ impl BulletWebSocketClient {
                         }
                         running.store(false, Ordering::Relaxed);
 
-                        if stop_flag.load(Ordering::Relaxed) {
+                        if stop_flag.load(Ordering::Acquire) {
                             break;
                         }
 
@@ -301,7 +308,12 @@ impl BulletWebSocketClient {
                     }
                 }
 
-                tokio::time::sleep(delay).await;
+                // Interruptible back-off sleep: disconnect() notifies stop_notify so
+                // we exit within one poll cycle rather than waiting up to 30 s.
+                tokio::select! {
+                    _ = tokio::time::sleep(delay) => {}
+                    _ = stop_notify.notified() => { break; }
+                }
                 delay = (delay * 2).min(Duration::from_secs(30));
             }
 
@@ -314,12 +326,23 @@ impl BulletWebSocketClient {
     }
 
     /// Signal the reconnect loop to stop and close the current connection.
+    ///
+    /// Also aborts the Python-side dispatch task (if one was stored via `dispatch_handle`)
+    /// so no further callbacks fire after this call returns.
     pub fn disconnect(&self) {
-        self.stop_flag.store(true, Ordering::Relaxed);
+        self.stop_flag.store(true, Ordering::Release);
         if let Ok(mut guard) = self.write_tx.lock() {
             *guard = None;
         }
         self.running.store(false, Ordering::Relaxed);
+        // Wake the back-off sleep so the loop exits immediately instead of waiting up to 30 s.
+        self.stop_notify.notify_one();
+        // Abort the dispatch task so no further Python callbacks fire after close().
+        if let Ok(mut guard) = self.dispatch_handle.lock() {
+            if let Some(handle) = guard.take() {
+                handle.abort();
+            }
+        }
     }
 
     /// Wait until the WebSocket is actively connected, or until `timeout_secs` elapse.

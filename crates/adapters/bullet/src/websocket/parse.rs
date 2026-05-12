@@ -138,6 +138,9 @@ pub fn depth_to_deltas(
     }
 
     let add_action = if is_snapshot { BookAction::Add } else { BookAction::Update };
+    // F_LAST is set only on the final delta so the data engine treats the entire
+    // batch as a single atomic update.  Snapshot levels also carry F_SNAPSHOT.
+    let base_flags: u8 = if is_snapshot { RecordFlag::F_SNAPSHOT as u8 } else { 0 };
 
     for [price_str, qty_str] in &msg.bids {
         let price_dec = Decimal::from_str(price_str)
@@ -157,15 +160,7 @@ pub fn depth_to_deltas(
         };
 
         let order = BookOrder::new(OrderSide::Buy, price, size, 0);
-        deltas.push(OrderBookDelta::new(
-            id,
-            action,
-            order,
-            RecordFlag::F_LAST as u8,
-            seq,
-            ts_event,
-            ts_init,
-        ));
+        deltas.push(OrderBookDelta::new(id, action, order, base_flags, seq, ts_event, ts_init));
     }
 
     for [price_str, qty_str] in &msg.asks {
@@ -186,15 +181,12 @@ pub fn depth_to_deltas(
         };
 
         let order = BookOrder::new(OrderSide::Sell, price, size, 0);
-        deltas.push(OrderBookDelta::new(
-            id,
-            action,
-            order,
-            RecordFlag::F_LAST as u8,
-            seq,
-            ts_event,
-            ts_init,
-        ));
+        deltas.push(OrderBookDelta::new(id, action, order, base_flags, seq, ts_event, ts_init));
+    }
+
+    // Mark the final delta (or the clear sentinel for an empty snapshot) as F_LAST.
+    if let Some(last) = deltas.last_mut() {
+        last.flags |= RecordFlag::F_LAST as u8;
     }
 
     OrderBookDeltas::new_checked(id, deltas).context("failed to construct OrderBookDeltas")
