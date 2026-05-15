@@ -532,6 +532,14 @@ class BulletExecutionClient(LiveExecutionClient):
             self._log.info(f"Cancel submitted: tx_id={tx_id}")
         except Exception as e:
             self._log.error(f"Failed to cancel order {command.client_order_id}: {e}")
+            self.generate_order_cancel_rejected(
+                strategy_id=order.strategy_id,
+                instrument_id=order.instrument_id,
+                client_order_id=command.client_order_id,
+                venue_order_id=command.venue_order_id,
+                reason=str(e),
+                ts_event=self._clock.timestamp_ns(),
+            )
 
     async def _modify_order(self, command: ModifyOrder) -> None:
         order = self._cache.order(command.client_order_id)
@@ -602,6 +610,14 @@ class BulletExecutionClient(LiveExecutionClient):
                 self._nt_to_cloid.pop(command.client_order_id.value, None)
             self._decrement_pending_amend(cloid_str)
             self._log.error(f"Failed to amend order {command.client_order_id}: {e}")
+            self.generate_order_modify_rejected(
+                strategy_id=command.strategy_id,
+                instrument_id=command.instrument_id,
+                client_order_id=command.client_order_id,
+                venue_order_id=command.venue_order_id,
+                reason=str(e),
+                ts_event=self._clock.timestamp_ns(),
+            )
 
     async def _cancel_all_orders(self, command: CancelAllOrders) -> None:
         if command.instrument_id:
